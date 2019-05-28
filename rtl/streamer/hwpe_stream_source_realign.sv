@@ -105,19 +105,9 @@ module hwpe_stream_source_realign #(
   logic unsigned [$clog2(DATA_WIDTH/8)+3:0] strb_rotate_q_shifted;
   logic unsigned [$clog2(DATA_WIDTH/8)+3:0] strb_rotate_inv_q_shifted;
 
-  logic clk_gated;
-
   logic int_first;
   logic int_last;
   logic int_last_packet;
-
-  /* clock gating */
-  cluster_clock_gating i_realign_gating (
-    .clk_i     ( clk_i         ),
-    .test_en_i ( test_mode_i   ),
-    .en_i      ( ctrl_i.enable ),
-    .clk_o     ( clk_gated     )
-  );
 
   /* management of misaligned access */
 
@@ -288,33 +278,37 @@ module hwpe_stream_source_realign #(
   end
   assign strb_rotate_inv_d = {($clog2(DATA_WIDTH/8)){1'b1}} - strb_rotate_d + 1;
 
-  always_ff @(posedge clk_gated or negedge rst_ni)
+  always_ff @(posedge clk_i or negedge rst_ni)
   begin
     if(~rst_ni) begin
       strb_rotate_q <= '0;
       strb_rotate_inv_q <= '0;
     end
-    else if (clear_i) begin
-      strb_rotate_q <= '0;
-      strb_rotate_inv_q <= '0;
-    end
-    else if (~int_last_packet & int_first) begin
-      strb_rotate_q <= strb_rotate_d;
-      strb_rotate_inv_q <= strb_rotate_inv_d;
+    else if (ctrl_i.enable) begin
+      if (clear_i) begin
+        strb_rotate_q <= '0;
+        strb_rotate_inv_q <= '0;
+      end
+      else if (~int_last_packet & int_first) begin
+        strb_rotate_q <= strb_rotate_d;
+        strb_rotate_inv_q <= strb_rotate_inv_d;
+      end
     end
   end
   assign strb_rotate_q_shifted = strb_rotate_q << 3;
   assign strb_rotate_inv_q_shifted = strb_rotate_inv_q << 3;
 
-  always_ff @(posedge clk_gated or negedge rst_ni)
+  always_ff @(posedge clk_i or negedge rst_ni)
   begin
     if(~rst_ni)
       stream_data_q <= '0;
-    else if (clear_i)
-      stream_data_q <= '0;
-    // last packet is kept "forever"
-    else if (~int_last_packet & push_i.valid & push_i.ready)
-      stream_data_q <= push_i.data;
+    else if (ctrl_i.enable) begin
+      if (clear_i)
+        stream_data_q <= '0;
+      // last packet is kept "forever"
+      else if (~int_last_packet & push_i.valid & push_i.ready)
+        stream_data_q <= push_i.data;
+    end
   end
   always_comb
   begin

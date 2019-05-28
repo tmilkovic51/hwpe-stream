@@ -35,41 +35,38 @@ module hwpe_stream_buffer #(
   hwpe_stream_intf_stream.source pop_o
 );
 
-  logic clk_gated;
+  logic en_i = pop_o.ready | clear_i;
 
-  cluster_clock_gating i_cg (
-    .clk_o     ( clk_gated             ),
-    .en_i      ( pop_o.ready | clear_i ),
-    .test_en_i ( test_mode_i           ),
-    .clk_i     ( clk_i                 )
-  );
-
-  always_ff @(posedge clk_gated or negedge rst_ni)
+  always_ff @(posedge clk_i or negedge rst_ni)
   begin
     if(~rst_ni) begin
       pop_o.data <= '0;
       pop_o.strb <= '0;
     end
-    else if(clear_i) begin
-      pop_o.data <= '0;
-      pop_o.strb <= '0;
-    end
-    else begin
-      pop_o.data <= push_i.data;
-      pop_o.strb <= push_i.strb;
+    else if(en_i) begin
+      if(clear_i) begin
+        pop_o.data <= '0;
+        pop_o.strb <= '0;
+      end
+      else begin
+        pop_o.data <= push_i.data;
+        pop_o.strb <= push_i.strb;
+      end
     end
   end
 
-  always_ff @(posedge clk_gated or negedge rst_ni)
+  always_ff @(posedge clk_i or negedge rst_ni)
   begin
     if(~rst_ni) begin
       pop_o.valid <= 1'b0;
     end
-    else if(clear_i) begin
-      pop_o.valid <= 1'b0;
-    end
-    else begin
-      pop_o.valid <= push_i.valid;
+    else if(en_i) begin
+      if(clear_i) begin
+        pop_o.valid <= 1'b0;
+      end
+      else begin
+        pop_o.valid <= push_i.valid;
+      end
     end
   end
 
