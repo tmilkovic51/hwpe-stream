@@ -1,7 +1,7 @@
 Copyright 1986-2018 Xilinx, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2018.3 (lin64) Build 2405991 Thu Dec  6 23:36:41 MST 2018
-| Date         : Sat Jun  1 00:00:42 2019
+| Date         : Sat Jun  1 13:15:17 2019
 | Host         : laptop running 64-bit Manjaro Linux
 | Command      : report_utilization -file my_hwpe_stream_fifo_utilization_synth.rpt -pb my_hwpe_stream_fifo_utilization_synth.pb
 | Design       : my_hwpe_stream_fifo
@@ -30,8 +30,8 @@ Table of Contents
 +-------------------------+------+-------+-----------+-------+
 |        Site Type        | Used | Fixed | Available | Util% |
 +-------------------------+------+-------+-----------+-------+
-| Slice LUTs*             |  111 |     0 |     53200 |  0.21 |
-|   LUT as Logic          |  111 |     0 |     53200 |  0.21 |
+| Slice LUTs*             |  109 |     0 |     53200 |  0.20 |
+|   LUT as Logic          |  109 |     0 |     53200 |  0.20 |
 |   LUT as Memory         |    0 |     0 |     17400 |  0.00 |
 | Slice Registers         |  296 |     0 |    106400 |  0.28 |
 |   Register as Flip Flop |  296 |     0 |    106400 |  0.28 |
@@ -147,14 +147,14 @@ Table of Contents
 | Ref Name | Used | Functional Category |
 +----------+------+---------------------+
 | FDCE     |  296 |        Flop & Latch |
-| LUT6     |   85 |                 LUT |
+| LUT6     |   84 |                 LUT |
 | IBUF     |   41 |                  IO |
-| OBUF     |   39 |                  IO |
+| OBUF     |   40 |                  IO |
 | LUT2     |   39 |                 LUT |
 | MUXF7    |   36 |               MuxFx |
-| OBUFT    |   17 |                  IO |
-| LUT5     |    6 |                 LUT |
-| LUT4     |    2 |                 LUT |
+| OBUFT    |   16 |                  IO |
+| LUT4     |    3 |                 LUT |
+| LUT5     |    2 |                 LUT |
 | LUT1     |    2 |                 LUT |
 | LUT3     |    1 |                 LUT |
 | BUFG     |    1 |               Clock |

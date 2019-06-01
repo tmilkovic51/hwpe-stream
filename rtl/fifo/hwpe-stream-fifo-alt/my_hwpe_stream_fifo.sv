@@ -20,9 +20,9 @@
  * backpressure (`ready`=0), decoupling two architectural domains.
  * This FIFO is single-clock and therefore cannot be used to cross two
  * distinct clock domains.
- * The FIFO will lower its `ready` signal on the input stream `push_i`
+ * The FIFO will lower its `ready` signal on the input stream `push`
  * interface when it is completely full, and will lower its `valid`
- * signal on the output stream `pop_o` interface when it is completely
+ * signal on the output stream `pop` interface when it is completely
  * empty.
  *
  * .. tabularcolumns:: |l|l|J|
@@ -74,114 +74,111 @@ module my_hwpe_stream_fifo #(
 
   output flags_fifo_t            flags_o,
 
-  hwpe_stream_intf_stream.sink   push_i,
-  hwpe_stream_intf_stream.source pop_o
+  hwpe_stream_intf_stream.sink   push,
+  hwpe_stream_intf_stream.source pop
 );
 
   // Local Parameter
+  localparam STRB_WIDTH = DATA_WIDTH/8;
   localparam ADDR_DEPTH = (FIFO_DEPTH==1) ? 1 : $clog2(FIFO_DEPTH);
 
-  enum logic [1:0] { EMPTY, FULL, MIDDLE } cs, ns;
   // Internal Signals
+  enum logic [1:0] { EMPTY, FULL, MIDDLE } cs, ns;
 
   logic [ADDR_DEPTH-1:0] pop_pointer_q,  pop_pointer_d;
   logic [ADDR_DEPTH-1:0] push_pointer_q, push_pointer_d;
-  logic [DATA_WIDTH+DATA_WIDTH/8-1:0] fifo_registers[FIFO_DEPTH-1:0];
-  integer       i;
 
-  assign flags_o.empty = (cs == EMPTY) ? 1'b1 : 1'b0;
-  assign flags_o.full  = (cs == FULL)  ? 1'b1 : 1'b0;
+  logic [DATA_WIDTH+STRB_WIDTH-1:0] fifo_registers[FIFO_DEPTH-1:0];
+  logic [DATA_WIDTH+STRB_WIDTH-1:0] data_out_int;
+  logic [DATA_WIDTH+STRB_WIDTH-1:0] data_in_int;
 
-  // state update
+
+  // Pop pointer
   always_ff @(posedge clk_i, negedge rst_ni)
   begin
-    if(~rst_ni) begin
-      cs             <= EMPTY;
-      pop_pointer_q  <= {ADDR_DEPTH {1'b0}};
-      push_pointer_q <= {ADDR_DEPTH {1'b0}};
-    end
-    else if(clear_i) begin
-      cs             <= EMPTY;
-      pop_pointer_q  <= {ADDR_DEPTH {1'b0}};
-      push_pointer_q <= {ADDR_DEPTH {1'b0}};
-    end
-    else begin
-      cs             <= ns;
-      pop_pointer_q  <= pop_pointer_d;
+    if (~rst_ni)
+      pop_pointer_q <= 0;
+    else if (clear_i)
+      pop_pointer_q <= 0;
+    else if (pop.ready && pop.valid)
+      pop_pointer_q <= pop_pointer_d;
+  end
+  assign pop_pointer_d = (pop_pointer_q == FIFO_DEPTH-1) ? 0 : pop_pointer_q + 1;
+
+  // Push pointer
+  always_ff @(posedge clk_i, negedge rst_ni)
+  begin
+    if (~rst_ni)
+      push_pointer_q <= 0;
+    else if (clear_i)
+      push_pointer_q <= 0;
+    else if (push.ready && push.valid)
       push_pointer_q <= push_pointer_d;
-    end
   end
+  assign push_pointer_d = (push_pointer_q == FIFO_DEPTH-1) ? 0 : push_pointer_q + 1;
 
-  always_comb
-  begin
-    if (pop_o.ready && pop_o.valid) begin
-      pop_pointer_d = (pop_pointer_q == FIFO_DEPTH-1) ? 0 : pop_pointer_q + 1;
-    end else begin
-      pop_pointer_d = pop_pointer_q;
-    end
-  end
-  
-  always_comb
-  begin
-    if (push_i.valid && push_i.ready) begin
-      push_pointer_d = (push_pointer_q == FIFO_DEPTH-1) ? 0 : push_pointer_q + 1;
-    end else begin
-      push_pointer_d  = push_pointer_q;
-    end
-  end
 
-  // drive ready/valid (a separte always_comb is necessary for Verilator)
+  // drive ready/valid (a separate always_comb is necessary for Verilator)
   always_comb
   begin
     case(cs)
       EMPTY: begin
-        push_i.ready = 1'b1;
-        pop_o.valid = 1'b0;
+        push.ready = 1'b1;
+        pop.valid = 1'b0;
       end
       MIDDLE: begin
-        push_i.ready = 1'b1;
-        pop_o.valid = 1'b1;
+        push.ready = 1'b1;
+        pop.valid = 1'b1;
       end
       FULL: begin
-        push_i.ready = 1'b0;
-        pop_o.valid = 1'b1;
+        push.ready = 1'b0;
+        pop.valid = 1'b1;
       end
       default : begin
-        push_i.ready = 1'b0;
-        pop_o.valid = 1'b0;
+        push.ready = 1'b0;
+        pop.valid = 1'b0;
       end
     endcase
   end
 
-  // Compute Next State
+  // FSM
+  always_ff @(posedge clk_i, negedge rst_ni)
+  begin
+    if(~rst_ni)
+      cs <= EMPTY;
+    else if(clear_i)
+      cs <= EMPTY;
+    else
+      cs <= ns;
+  end
+
   always_comb
   begin
     ns = cs;
     case(cs)
     EMPTY:
-      if(push_i.valid)
+      if(push.valid)
         ns = MIDDLE;
     MIDDLE:
       if(pop_pointer_d == push_pointer_d) begin
-        if(push_i.valid)
+        if(push.valid)
           ns = FULL;
-        else if(pop_o.ready)
+        else if(pop.ready)
           ns = EMPTY;
       end
     FULL:
-      if(pop_o.ready)
+      if(pop.ready)
         ns = MIDDLE;
     default:
       ns = EMPTY;
     endcase
   end
 
-  logic [DATA_WIDTH+DATA_WIDTH/8-1:0] data_out_int;
-  logic [DATA_WIDTH+DATA_WIDTH/8-1:0] data_in_int;
-
+  // FIFO implementation
   generate
     if(LATCH_FIFO == 0) begin : fifo_ff_gen
 
+      integer i;
       always_ff @(posedge clk_i, negedge rst_ni)
       begin
         if(~rst_ni) begin
@@ -193,8 +190,8 @@ module my_hwpe_stream_fifo #(
             fifo_registers[i] <= '0;
         end
         else begin
-          if(push_i.ready & push_i.valid)
-            fifo_registers[push_pointer_q] <= { push_i.data, push_i.strb } ;
+          if(push.ready & push.valid)
+            fifo_registers[push_pointer_q] <= { push.data, push.strb } ;
         end
       end
 
@@ -203,18 +200,18 @@ module my_hwpe_stream_fifo #(
     end
     else if(LATCH_FIFO_TEST_WRAP == 0) begin : fifo_latch_gen
 
-      assign data_in_int = { push_i.data, push_i.strb };
+      assign data_in_int = { push.data, push.strb };
 
       hwpe_stream_fifo_scm #(
         .ADDR_WIDTH ( ADDR_DEPTH                ),
-        .DATA_WIDTH ( DATA_WIDTH + DATA_WIDTH/8 )
+        .DATA_WIDTH ( DATA_WIDTH + STRB_WIDTH )
       ) i_fifo_latch (
         .clk         ( clk_i                       ),
         .rst_n       ( rst_ni                      ),
         .ReadEnable  ( 1'b1                        ),
         .ReadAddr    ( pop_pointer_d               ),
         .ReadData    ( data_out_int                ),
-        .WriteEnable ( push_i.ready & push_i.valid ),
+        .WriteEnable ( push.ready & push.valid ),
         .WriteAddr   ( push_pointer_q              ),
         .WriteData   ( data_in_int                 )
       );
@@ -222,18 +219,18 @@ module my_hwpe_stream_fifo #(
     end
     else begin : fifo_latch_test_wrap_gen
 
-      assign data_in_int = { push_i.data, push_i.strb };
+      assign data_in_int = { push.data, push.strb };
 
       hwpe_stream_fifo_scm_test_wrap #(
         .ADDR_WIDTH ( ADDR_DEPTH                ),
-        .DATA_WIDTH ( DATA_WIDTH + DATA_WIDTH/8 )
+        .DATA_WIDTH ( DATA_WIDTH + STRB_WIDTH )
       ) i_fifo_latch (
         .clk ( clk_i ),
         .rst_n       ( rst_ni                      ),
         .ReadEnable  ( 1'b1                        ),
         .ReadAddr    ( pop_pointer_d               ),
         .ReadData    ( data_out_int                ),
-        .WriteEnable ( push_i.ready & push_i.valid ),
+        .WriteEnable ( push.ready & push.valid ),
         .WriteAddr   ( push_pointer_q              ),
         .WriteData   ( data_in_int                 ),
         .BIST        ( 1'b0                        ), // BIST ports, connect me
@@ -247,7 +244,10 @@ module my_hwpe_stream_fifo #(
     end
   endgenerate
 
-  assign pop_o.data = data_out_int[DATA_WIDTH+DATA_WIDTH/8-1:DATA_WIDTH/8];
-  assign pop_o.strb = data_out_int[DATA_WIDTH/8-1:0];
+  assign flags_o.empty = (cs == EMPTY) ? 1'b1 : 1'b0;
+  assign flags_o.full  = (cs == FULL)  ? 1'b1 : 1'b0;
+
+  assign pop.data = data_out_int[DATA_WIDTH+STRB_WIDTH-1:STRB_WIDTH];
+  assign pop.strb = data_out_int[STRB_WIDTH-1:0];
 
 endmodule // hwpe_stream_fifo
