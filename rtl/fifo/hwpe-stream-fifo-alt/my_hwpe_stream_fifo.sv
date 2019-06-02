@@ -68,22 +68,22 @@ module my_hwpe_stream_fifo #(
   parameter int unsigned LATCH_FIFO_TEST_WRAP = 0
 )
 (
-  input  logic                   clk_i,
-  input  logic                   rst_ni,
-  input  logic                   clear_i,
+  input  logic                   clk,
+  input  logic                   rst_n,
+  input  logic                   clear,
 
-  output flags_fifo_t            flags_o,
+  output flags_fifo_t            flags,
 
   hwpe_stream_intf_stream.sink   push,
   hwpe_stream_intf_stream.source pop
 );
 
-  // Local Parameter
+  // Local Parameters
   localparam STRB_WIDTH = DATA_WIDTH/8;
   localparam ADDR_DEPTH = (FIFO_DEPTH==1) ? 1 : $clog2(FIFO_DEPTH);
 
   // Internal Signals
-  enum logic [1:0] { EMPTY, FULL, MIDDLE } cs, ns;
+  enum logic [1:0] { EMPTY, FULL, MIDDLE } current_state, next_state;
 
   logic [ADDR_DEPTH-1:0] pop_pointer_q,  pop_pointer_d;
   logic [ADDR_DEPTH-1:0] push_pointer_q, push_pointer_d;
@@ -92,36 +92,55 @@ module my_hwpe_stream_fifo #(
   logic [DATA_WIDTH+STRB_WIDTH-1:0] data_out_int;
   logic [DATA_WIDTH+STRB_WIDTH-1:0] data_in_int;
 
+  logic push_valid_handshake, pop_valid_handshake;
+
+  assign push_valid_handshake = push.ready & push.valid;
+  assign pop_valid_handshake = pop.ready & pop.valid;
+
 
   // Pop pointer
-  always_ff @(posedge clk_i, negedge rst_ni)
+  always_ff @(posedge clk, negedge rst_n)
   begin
-    if (~rst_ni)
+    if (~rst_n)
       pop_pointer_q <= 0;
-    else if (clear_i)
+    else if (clear)
       pop_pointer_q <= 0;
-    else if (pop.ready && pop.valid)
+    else if (pop_valid_handshake)
       pop_pointer_q <= pop_pointer_d;
   end
-  assign pop_pointer_d = (pop_pointer_q == FIFO_DEPTH-1) ? 0 : pop_pointer_q + 1;
+
+  always_comb
+  begin
+    if (pop_valid_handshake)
+      pop_pointer_d = (pop_pointer_q == FIFO_DEPTH-1) ? 0 : pop_pointer_q + 1;
+    else
+      pop_pointer_d = pop_pointer_q;
+  end
 
   // Push pointer
-  always_ff @(posedge clk_i, negedge rst_ni)
+  always_ff @(posedge clk, negedge rst_n)
   begin
-    if (~rst_ni)
+    if (~rst_n)
       push_pointer_q <= 0;
-    else if (clear_i)
+    else if (clear)
       push_pointer_q <= 0;
-    else if (push.ready && push.valid)
+    else if (push_valid_handshake)
       push_pointer_q <= push_pointer_d;
   end
-  assign push_pointer_d = (push_pointer_q == FIFO_DEPTH-1) ? 0 : push_pointer_q + 1;
+
+  always_comb
+  begin
+    if (push_valid_handshake)
+      push_pointer_d = (push_pointer_q == FIFO_DEPTH-1) ? 0 : push_pointer_q + 1;
+    else
+      push_pointer_d = push_pointer_q;
+  end
 
 
   // drive ready/valid (a separate always_comb is necessary for Verilator)
   always_comb
   begin
-    case(cs)
+    case(current_state)
       EMPTY: begin
         push.ready = 1'b1;
         pop.valid = 1'b0;
@@ -141,56 +160,59 @@ module my_hwpe_stream_fifo #(
     endcase
   end
 
+
   // FSM
-  always_ff @(posedge clk_i, negedge rst_ni)
+  always_ff @(posedge clk, negedge rst_n)
   begin
-    if(~rst_ni)
-      cs <= EMPTY;
-    else if(clear_i)
-      cs <= EMPTY;
+    if(~rst_n)
+      current_state <= EMPTY;
+    else if(clear)
+      current_state <= EMPTY;
     else
-      cs <= ns;
+      current_state <= next_state;
   end
 
   always_comb
   begin
-    ns = cs;
-    case(cs)
+    next_state = current_state;
+    case(current_state)
     EMPTY:
-      if(push.valid)
-        ns = MIDDLE;
-    MIDDLE:
-      if(pop_pointer_d == push_pointer_d) begin
-        if(push.valid)
-          ns = FULL;
-        else if(pop.ready)
-          ns = EMPTY;
+      if(push_valid_handshake)
+        next_state = MIDDLE;
+    MIDDLE: begin
+      if (push_pointer_d == pop_pointer_d) begin
+        if (pop.ready)
+          next_state = EMPTY;
+        if (push.ready)
+          next_state = FULL;
       end
+    end
     FULL:
-      if(pop.ready)
-        ns = MIDDLE;
+      if(pop_valid_handshake)
+        next_state = MIDDLE;
     default:
-      ns = EMPTY;
+      next_state = EMPTY;
     endcase
   end
+
 
   // FIFO implementation
   generate
     if(LATCH_FIFO == 0) begin : fifo_ff_gen
 
       integer i;
-      always_ff @(posedge clk_i, negedge rst_ni)
+      always_ff @(posedge clk, negedge rst_n)
       begin
-        if(~rst_ni) begin
+        if(~rst_n) begin
           for (i=0; i< FIFO_DEPTH; i++)
             fifo_registers[i] <= '0;
         end
-        else if(clear_i) begin
+        else if(clear) begin
           for (i=0; i< FIFO_DEPTH; i++)
             fifo_registers[i] <= '0;
         end
         else begin
-          if(push.ready & push.valid)
+          if(push_valid_handshake)
             fifo_registers[push_pointer_q] <= { push.data, push.strb } ;
         end
       end
@@ -203,17 +225,17 @@ module my_hwpe_stream_fifo #(
       assign data_in_int = { push.data, push.strb };
 
       hwpe_stream_fifo_scm #(
-        .ADDR_WIDTH ( ADDR_DEPTH                ),
+        .ADDR_WIDTH ( ADDR_DEPTH              ),
         .DATA_WIDTH ( DATA_WIDTH + STRB_WIDTH )
       ) i_fifo_latch (
-        .clk         ( clk_i                       ),
-        .rst_n       ( rst_ni                      ),
-        .ReadEnable  ( 1'b1                        ),
-        .ReadAddr    ( pop_pointer_d               ),
-        .ReadData    ( data_out_int                ),
-        .WriteEnable ( push.ready & push.valid ),
-        .WriteAddr   ( push_pointer_q              ),
-        .WriteData   ( data_in_int                 )
+        .clk         ( clk                  ),
+        .rst_n       ( rst_n                ),
+        .ReadEnable  ( 1'b1                 ),
+        .ReadAddr    ( pop_pointer_d        ),
+        .ReadData    ( data_out_int         ),
+        .WriteEnable ( push_valid_handshake ),
+        .WriteAddr   ( push_pointer_q       ),
+        .WriteData   ( data_in_int          )
       );
 
     end
@@ -222,30 +244,30 @@ module my_hwpe_stream_fifo #(
       assign data_in_int = { push.data, push.strb };
 
       hwpe_stream_fifo_scm_test_wrap #(
-        .ADDR_WIDTH ( ADDR_DEPTH                ),
+        .ADDR_WIDTH ( ADDR_DEPTH              ),
         .DATA_WIDTH ( DATA_WIDTH + STRB_WIDTH )
       ) i_fifo_latch (
-        .clk ( clk_i ),
-        .rst_n       ( rst_ni                      ),
-        .ReadEnable  ( 1'b1                        ),
-        .ReadAddr    ( pop_pointer_d               ),
-        .ReadData    ( data_out_int                ),
-        .WriteEnable ( push.ready & push.valid ),
-        .WriteAddr   ( push_pointer_q              ),
-        .WriteData   ( data_in_int                 ),
-        .BIST        ( 1'b0                        ), // BIST ports, connect me
-        .CSN_T       (                             ), // BIST ports, connect me
-        .WEN_T       (                             ), // BIST ports, connect me
-        .A_T         (                             ), // BIST ports, connect me
-        .D_T         (                             ), // BIST ports, connect me
-        .Q_T         (                             )  // BIST ports, connect me
+        .clk         ( clk                  ),
+        .rst_n       ( rst_n                ),
+        .ReadEnable  ( 1'b1                 ),
+        .ReadAddr    ( pop_pointer_d        ),
+        .ReadData    ( data_out_int         ),
+        .WriteEnable ( push_valid_handshake ),
+        .WriteAddr   ( push_pointer_q       ),
+        .WriteData   ( data_in_int          ),
+        .BIST        ( 1'b0                 ), // BIST ports, connect me
+        .CSN_T       (                      ), // BIST ports, connect me
+        .WEN_T       (                      ), // BIST ports, connect me
+        .A_T         (                      ), // BIST ports, connect me
+        .D_T         (                      ), // BIST ports, connect me
+        .Q_T         (                      )  // BIST ports, connect me
       );
 
     end
   endgenerate
 
-  assign flags_o.empty = (cs == EMPTY) ? 1'b1 : 1'b0;
-  assign flags_o.full  = (cs == FULL)  ? 1'b1 : 1'b0;
+  assign flags.empty = (current_state == EMPTY) ? 1'b1 : 1'b0;
+  assign flags.full  = (current_state == FULL)  ? 1'b1 : 1'b0;
 
   assign pop.data = data_out_int[DATA_WIDTH+STRB_WIDTH-1:STRB_WIDTH];
   assign pop.strb = data_out_int[STRB_WIDTH-1:0];
